@@ -67,21 +67,23 @@ ORIG is the original function, ARGS are its arguments."
 (defun org-window-habit-auto-repeat (&rest _args)
   "Reassign the date of the habit to the next day at which it is required."
   (interactive)
-  (let* ((required-interval-start
-          (org-window-habit-get-next-required-interval
-           (org-window-habit-create-instance-from-heading-at-point)))
-         (repeat (org-get-repeat))
-         (target-time-string
-          (format-time-string (car org-time-stamp-formats)
-                              required-interval-start)))
-    (when org-window-habit-repeat-to-deadline
-      (org-deadline nil target-time-string)
-      (when (null repeat)
-        (org-window-habit-add-repeater ".+1d")))
-    (when org-window-habit-repeat-to-scheduled
-      (org-schedule nil target-time-string)
-      (when (null repeat)
-        (org-window-habit-add-repeater ".+1d")))))
+  (let* ((habit (org-window-habit-create-instance-from-heading-at-point))
+         (required-interval-start
+          (when habit
+            (org-window-habit-get-next-required-interval habit))))
+    (when required-interval-start
+      (let ((repeat (org-get-repeat))
+            (target-time-string
+             (format-time-string (car org-time-stamp-formats)
+                                 required-interval-start)))
+        (when org-window-habit-repeat-to-deadline
+          (org-deadline nil target-time-string)
+          (when (null repeat)
+            (org-window-habit-add-repeater ".+1d")))
+        (when org-window-habit-repeat-to-scheduled
+          (org-schedule nil target-time-string)
+          (when (null repeat)
+            (org-window-habit-add-repeater ".+1d")))))))
 
 (defun org-window-habit-add-repeater (repeater)
   "Add REPEATER string to the last inserted timestamp."

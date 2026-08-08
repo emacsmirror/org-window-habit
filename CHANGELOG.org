@@ -3,7 +3,16 @@
 All notable changes to org-window-habit are documented in this file.
 
 ** Unreleased
-- No changes yet.
+
+*** Added
+- Runtime helpers to test habit activity and materialize the config active at a
+  reference time
+
+*** Fixed
+- Respect versioned CONFIG =:from=/=:until= ranges during evaluation, including
+  inactive gaps and bounded single configs
+- Avoid conformity, streak, next-required, graph-reminder, and auto-repeat
+  results for inactive habits
 
 ** 2026-02-04 (v0.1.3)
 

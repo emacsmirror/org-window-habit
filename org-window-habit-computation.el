@@ -255,35 +255,41 @@ ARGS are passed to the conforming ratio calculation."
 TIME defaults to the current time.  THRESHOLD defaults to 1.0.
 The current interval counts if its aggregate conforming ratio is at
 least THRESHOLD, and the scan continues backward until the first
-non-conforming interval or HABIT's effective start."
+non-conforming interval or the active config's start.  Return nil when
+HABIT is inactive at TIME."
   (setq time (or time (current-time)))
   (setq threshold (or threshold 1.0))
-  (if (not (org-window-habit-has-any-done-times habit))
-      0
-    (with-slots (window-specs assessment-decrement-plist start-time) habit
-      (let ((iterators
-             (cl-loop for window-spec in window-specs
-                      collect
-                      (org-window-habit-iterator-from-time window-spec time)))
-            (streak-start-time
-             (or (org-window-habit-get-effective-start habit) start-time))
-            (streak 0)
-            (keep-scanning t))
-        (while keep-scanning
-          (let* ((window (oref (car iterators) window))
-                 (assessment-end (oref window assessment-end-time)))
-            (if (not (time-less-p streak-start-time assessment-end))
-                (setq keep-scanning nil)
-              (let ((assessment-value
-                     (org-window-habit-assess-interval habit iterators)))
-                (if (>= assessment-value threshold)
-                    (progn
-                      (cl-incf streak)
-                      (cl-loop for iterator in iterators
-                               do (org-window-habit-advance
-                                   iterator :amount assessment-decrement-plist)))
-                  (setq keep-scanning nil))))))
-        streak))))
+  (let ((active-habit (org-window-habit-for-time habit time)))
+    (cond
+     ((null active-habit) nil)
+     ((not (eq active-habit habit))
+      (org-window-habit-current-streak active-habit time threshold))
+     ((not (org-window-habit-has-any-done-times habit)) 0)
+     (t
+      (with-slots (window-specs assessment-decrement-plist start-time) habit
+        (let ((iterators
+               (cl-loop for window-spec in window-specs
+                        collect
+                        (org-window-habit-iterator-from-time window-spec time)))
+              (streak-start-time
+               (or (plist-get (oref habit active-config) :from) start-time))
+              (streak 0)
+              (keep-scanning t))
+          (while keep-scanning
+            (let* ((window (oref (car iterators) window))
+                   (assessment-end (oref window assessment-end-time)))
+              (if (not (time-less-p streak-start-time assessment-end))
+                  (setq keep-scanning nil)
+                (let ((assessment-value
+                       (org-window-habit-assess-interval habit iterators)))
+                  (if (>= assessment-value threshold)
+                      (progn
+                        (cl-incf streak)
+                        (cl-loop for iterator in iterators
+                                 do (org-window-habit-advance
+                                     iterator :amount assessment-decrement-plist)))
+                    (setq keep-scanning nil))))))
+          streak))))))
 
 
 ;;; Next required interval
@@ -292,48 +298,68 @@ non-conforming interval or HABIT's effective start."
   ((habit org-window-habit) &optional now)
   "Find the next time when HABIT will need a completion.
 Searches forward from NOW until the conforming ratio drops below
-reschedule-threshold.  Respects reschedule-days and only-days restrictions."
+reschedule-threshold.  Respects reschedule-days and only-days restrictions.
+Return nil when HABIT is inactive at NOW or becomes inactive before a
+completion is required."
   (setq now (or now (current-time)))
-  (with-slots
-      (window-specs reschedule-interval reschedule-threshold
-                    reschedule-assessment-interval aggregation-fn done-times
-                    only-days reschedule-days)
-      habit
-    (let ((raw-result
-           (if (org-window-habit-has-any-done-times habit)
-               (cl-loop
-                with candidate-time =
-                (org-window-habit-normalize-time-to-duration
-                 (org-window-habit-time-max
-                  now
-                  (org-window-habit-keyed-duration-add-plist
-                   (aref done-times 0)
-                   reschedule-interval))
-                 reschedule-assessment-interval)
-                for iterators =
-                (cl-loop for window-spec in window-specs
-                         collect
-                         (org-window-habit-iterator-from-time
-                          window-spec candidate-time))
-                for conforming-values =
-                (cl-loop for iterator in iterators
-                         collect
-                         (org-window-habit-get-conforming-value iterator))
-                for assessment-value =
-                (funcall aggregation-fn conforming-values)
-                until (< assessment-value reschedule-threshold)
-                do (setq candidate-time
-                         (org-window-habit-keyed-duration-add-plist
-                          candidate-time
-                          reschedule-assessment-interval))
-                finally return candidate-time)
-             (org-window-habit-normalize-time-to-duration
-              now reschedule-assessment-interval))))
-      ;; Snap to next allowed reschedule day
-      (org-window-habit-next-allowed-day
-       raw-result
-       (org-window-habit-effective-reschedule-days
-        only-days reschedule-days)))))
+  (let ((active-habit (org-window-habit-for-time habit now)))
+    (when active-habit
+      (with-slots (reschedule-interval reschedule-assessment-interval done-times)
+          active-habit
+        (let* ((latest-done-time
+               (cl-loop for done-time across done-times
+                         when (org-window-habit-time-less-or-equal-p
+                               done-time now)
+                         return done-time))
+               (candidate-time
+                (if latest-done-time
+                    (org-window-habit-normalize-time-to-duration
+                     (org-window-habit-time-max
+                      now
+                      (org-window-habit-keyed-duration-add-plist
+                       latest-done-time reschedule-interval))
+                     reschedule-assessment-interval)
+                  (org-window-habit-normalize-time-to-duration
+                   now reschedule-assessment-interval)))
+              result)
+          (while (and (null result) candidate-time)
+            (let ((candidate-habit
+                   (org-window-habit-for-time habit candidate-time)))
+              (if (null candidate-habit)
+                  (setq candidate-time nil)
+                (with-slots
+                    (window-specs reschedule-threshold
+                                  reschedule-assessment-interval aggregation-fn
+                                  only-days reschedule-days)
+                    candidate-habit
+                  (let* ((iterators
+                          (cl-loop for window-spec in window-specs
+                                   collect
+                                   (org-window-habit-iterator-from-time
+                                    window-spec candidate-time)))
+                         (conforming-values
+                          (cl-loop for iterator in iterators
+                                   collect
+                                   (org-window-habit-get-conforming-value iterator)))
+                         (assessment-value
+                          (funcall aggregation-fn conforming-values)))
+                    (if (< assessment-value reschedule-threshold)
+                        (let ((allowed-time
+                               (org-window-habit-next-allowed-day
+                                candidate-time
+                                (org-window-habit-effective-reschedule-days
+                                 only-days reschedule-days))))
+                          (when (eq (oref candidate-habit active-config)
+                                    (org-window-habit-get-config-for-time
+                                     (oref habit configs) allowed-time))
+                            (setq result allowed-time))
+                          (unless result
+                            (setq candidate-time nil)))
+                      (setq candidate-time
+                            (org-window-habit-keyed-duration-add-plist
+                             candidate-time
+                             reschedule-assessment-interval))))))))
+          result)))))
 
 (cl-defmethod org-window-habit-get-future-required-intervals
   ((habit org-window-habit) count &optional now)
@@ -350,50 +376,63 @@ Each interval is computed by:
 This enables prospective planning: showing future \"must complete by\" dates
 assuming you complete at the last possible moment each time."
   (setq now (or now (current-time)))
-  (with-slots (window-specs assessment-interval reschedule-assessment-interval
-                            reschedule-interval reschedule-threshold
-                            max-repetitions-per-interval aggregation-fn only-days
-                            reschedule-days start-time)
-      habit
-    (let ((result '())
-          ;; Copy done-times to a list we can extend with simulated completions
-          (simulated-done-times (append (oref habit done-times) nil)))
-      (cl-loop
-       repeat count
-       do
-       ;; Create deep copies of window-specs to avoid mutation of original habit
-       ;; (initialize-instance sets the habit back-reference on each spec)
-       (let* ((copied-specs
-               (cl-loop for spec in window-specs
-                        collect (make-instance 'org-window-habit-window-spec
-                                               :duration (oref spec duration-plist)
-                                               :repetitions (oref spec target-repetitions)
-                                               :value (oref spec conforming-value)
-                                               :find-window (oref spec find-window))))
-              (temp-habit (make-instance 'org-window-habit
-                                         :window-specs copied-specs
-                                         :assessment-interval assessment-interval
-                                         :reschedule-assessment-interval
-                                         reschedule-assessment-interval
-                                         :reschedule-interval reschedule-interval
-                                         :reschedule-threshold reschedule-threshold
-                                         :max-repetitions-per-interval max-repetitions-per-interval
-                                         :aggregation-fn aggregation-fn
-                                         :only-days only-days
-                                         :reschedule-days reschedule-days
-                                         :done-times (vconcat
-                                                      (sort (copy-sequence simulated-done-times)
-                                                            (lambda (a b) (time-less-p b a))))
-                                         :start-time start-time))
-              (next-required (org-window-habit-get-next-required-interval temp-habit now)))
-         ;; Add to results
-         (push next-required result)
-         ;; Simulate completion at this time for next iteration
-         (push next-required simulated-done-times)
-         ;; Update now to be after the simulated completion
-         (setq now next-required)))
-      ;; Return in chronological order
-      (nreverse result))))
+  (let ((active-habit (org-window-habit-for-time habit now)))
+    (if (null active-habit)
+        nil
+      (unless (eq active-habit habit)
+        (setq habit active-habit))
+      (with-slots (window-specs assessment-interval reschedule-assessment-interval
+                  reschedule-interval reschedule-threshold
+                  max-repetitions-per-interval aggregation-fn only-days
+                  reschedule-days start-time configs active-config
+                  graph-assessment-fn)
+          habit
+        (let ((result '())
+              (simulated-done-times (append (oref habit done-times) nil)))
+          (cl-loop
+           repeat count
+           while now
+           do
+           (let* ((copied-specs
+                   (cl-loop
+                    for spec in window-specs
+                    collect
+                    (make-instance
+                     'org-window-habit-window-spec
+                     :duration (oref spec duration-plist)
+                     :repetitions (oref spec target-repetitions)
+                     :value (oref spec conforming-value)
+                     :find-window (oref spec find-window))))
+                  (temp-habit
+                   (make-instance
+                    'org-window-habit
+                    :window-specs copied-specs
+                    :assessment-interval assessment-interval
+                    :reschedule-assessment-interval
+                    reschedule-assessment-interval
+                    :reschedule-interval reschedule-interval
+                    :reschedule-threshold reschedule-threshold
+                    :max-repetitions-per-interval
+                    max-repetitions-per-interval
+                    :aggregation-fn aggregation-fn
+                    :only-days only-days
+                    :reschedule-days reschedule-days
+                    :configs configs
+                    :active-config active-config
+                    :graph-assessment-fn graph-assessment-fn
+                    :done-times
+                    (vconcat
+                     (sort (copy-sequence simulated-done-times)
+                           (lambda (a b) (time-less-p b a))))
+                    :start-time start-time))
+                  (next-required
+                   (org-window-habit-get-next-required-interval
+                    temp-habit now)))
+             (when next-required
+               (push next-required result)
+               (push next-required simulated-done-times))
+             (setq now next-required)))
+          (nreverse result))))))
 
 
 ;;; Assessment functions
@@ -414,33 +453,46 @@ TIME defaults to current time.
 Returns an alist with:
   - windowSpecsStatus: list of per-spec status with conformingRatio,
     completionsInWindow, targetRepetitions, duration, and conformingValue
-  - aggregatedConformingRatio: the overall conforming ratio after aggregation"
+  - aggregatedConformingRatio: the overall conforming ratio after aggregation
+Return nil when HABIT is inactive at TIME."
   (setq time (or time (current-time)))
-  (with-slots (window-specs aggregation-fn) habit
-    (let* ((iterators (cl-loop for spec in window-specs
-                               collect (org-window-habit-iterator-from-time spec time)))
-           (per-spec-data
-            (cl-loop for iterator in iterators
-                     for spec = (oref iterator window-spec)
-                     for window = (oref iterator window)
-                     for conforming-ratio = (org-window-habit-conforming-ratio iterator)
-                     for start-index = (oref iterator start-index)
-                     for end-index = (oref iterator end-index)
-                     for completions = (- end-index start-index)
-                     collect `(("conformingRatio" . ,conforming-ratio)
-                               ("completionsInWindow" . ,completions)
-                               ("targetRepetitions" . ,(oref spec target-repetitions))
-                               ("duration" . ,(oref spec duration-plist))
-                               ("conformingValue" . ,(oref spec conforming-value))
-                               ("windowStart" . ,(oref window start-time))
-                               ("windowEnd" . ,(oref window end-time)))))
-           (conforming-values
-            (cl-loop for iterator in iterators
-                     collect (org-window-habit-get-conforming-value iterator)))
-           (aggregated-ratio (or (funcall aggregation-fn conforming-values) 0.0)))
-      `(("windowSpecsStatus" . ,per-spec-data)
-        ("aggregatedConformingRatio" . ,aggregated-ratio)
-        ("conformingStreak" . ,(org-window-habit-current-streak habit time))))))
+  (let ((active-habit (org-window-habit-for-time habit time)))
+    (when active-habit
+      (unless (eq active-habit habit)
+        (setq habit active-habit))
+      (with-slots (window-specs aggregation-fn) habit
+        (let* ((iterators
+                (cl-loop for spec in window-specs
+                         collect
+                         (org-window-habit-iterator-from-time spec time)))
+               (per-spec-data
+                (cl-loop
+                 for iterator in iterators
+                 for spec = (oref iterator window-spec)
+                 for window = (oref iterator window)
+                 for conforming-ratio =
+                 (org-window-habit-conforming-ratio iterator)
+                 for start-index = (oref iterator start-index)
+                 for end-index = (oref iterator end-index)
+                 for completions = (- end-index start-index)
+                 collect `(("conformingRatio" . ,conforming-ratio)
+                           ("completionsInWindow" . ,completions)
+                           ("targetRepetitions" .
+                                                ,(oref spec target-repetitions))
+                           ("duration" . ,(oref spec duration-plist))
+                           ("conformingValue" . ,(oref spec conforming-value))
+                           ("windowStart" . ,(oref window start-time))
+                           ("windowEnd" . ,(oref window end-time)))))
+               (conforming-values
+                (cl-loop for iterator in iterators
+                         collect
+                         (org-window-habit-get-conforming-value iterator)))
+               (aggregated-ratio
+                (or (funcall aggregation-fn conforming-values) 0.0)))
+          `(("windowSpecsStatus" . ,per-spec-data)
+            ("aggregatedConformingRatio" . ,aggregated-ratio)
+            ("conformingStreak" .
+                                ,(org-window-habit-current-streak habit time))))))))
 
 (cl-defmethod org-window-habit-assess-interval-with-and-without-completions
   ((habit org-window-habit) iterators modify-completions-fn)

@@ -4015,6 +4015,97 @@ Using (:weeks 1) instead of (:days 7) for week boundaries."
       ;; Should return oldest config (2 repetitions)
       (should (equal (plist-get (car (plist-get result :window-specs)) :repetitions) 2)))))
 
+(ert-deftest owh-test-bounded-single-config-is-inactive-after-until ()
+  "A bounded single config must not produce current requirement data after :until."
+  (let* ((config-str
+          "(:until \"2025-03-01\" :window-specs ((:duration (:days 7) :repetitions 2)))")
+         (active-time (owh-test-make-time 2025 2 28 12))
+         (inactive-time (owh-test-make-time 2025 3 1))
+         (habit (org-window-habit-create-instance-from-config
+                 config-str
+                 (vector (owh-test-make-time 2025 2 27 10)
+                         (owh-test-make-time 2025 2 26 10))
+                 active-time))
+         (window (org-window-habit-get-assessment-window
+                  (car (oref habit window-specs)) inactive-time))
+         (graph-result
+          (org-window-habit-default-graph-assessment-fn
+           0.0 1.0 0 'present habit window)))
+    (should habit)
+    (should-not (org-window-habit-active-at-time-p habit inactive-time))
+    (should-not (org-window-habit-for-time habit inactive-time))
+    (should-not (org-window-habit-create-instance-from-config
+                 config-str [] inactive-time))
+    (should-not (org-window-habit-get-window-specs-status
+                 habit inactive-time))
+    (should-not (org-window-habit-current-streak habit inactive-time))
+    (should-not (org-window-habit-get-next-required-interval
+                 habit inactive-time))
+    (should-not (org-window-habit-build-graph habit inactive-time))
+    (should (equal (org-window-habit-make-graph-display-string
+                    habit inactive-time)
+                   ""))
+    (should-not (eq (car (nth 1 graph-result))
+                    org-window-habit-completion-needed-today-glyph))))
+
+(ert-deftest owh-test-versioned-config-gap-is-inactive ()
+  "Historical and resumed versions stay evaluable while their gap is inactive."
+  (let* ((config-str
+          "((:from \"2025-06-01\" :window-specs ((:duration (:days 7) :repetitions 5))) (:until \"2025-03-01\" :window-specs ((:duration (:days 7) :repetitions 2))))")
+         (historical-time (owh-test-make-time 2025 2 28 12))
+         (gap-time (owh-test-make-time 2025 4 15 12))
+         (resumed-time (owh-test-make-time 2025 6 15 12))
+         (habit (org-window-habit-create-instance-from-config
+                 config-str
+                 (vector (owh-test-make-time 2025 6 14 10)
+                         (owh-test-make-time 2025 2 27 10)
+                         (owh-test-make-time 2025 2 26 10))
+                 resumed-time))
+         (historical-status
+          (org-window-habit-get-window-specs-status habit historical-time))
+         (resumed-status
+          (org-window-habit-get-window-specs-status habit resumed-time)))
+    (should (= (cdr (assoc "targetRepetitions"
+                           (car (cdr (assoc "windowSpecsStatus"
+                                            historical-status)))))
+               2))
+    (should (>= (cdr (assoc "aggregatedConformingRatio"
+                            historical-status))
+                0.99))
+    (should-not (org-window-habit-active-at-time-p habit gap-time))
+    (should-not (org-window-habit-get-window-specs-status habit gap-time))
+    (should-not (org-window-habit-get-next-required-interval habit gap-time))
+    (should (= (cdr (assoc "targetRepetitions"
+                           (car (cdr (assoc "windowSpecsStatus"
+                                            resumed-status)))))
+               5))))
+
+(ert-deftest owh-test-runtime-config-boundaries-are-half-open ()
+  "Runtime selection treats :from as inclusive and :until as exclusive."
+  (let* ((boundary (owh-test-make-time 2025 6 1))
+         (before-boundary (time-subtract boundary (seconds-to-time 1)))
+         (config-str
+          "((:from \"2025-06-01\" :window-specs ((:duration (:days 7) :repetitions 5))) (:until \"2025-06-01\" :window-specs ((:duration (:days 7) :repetitions 2))))")
+         (before (org-window-habit-create-instance-from-config
+                  config-str [] before-boundary))
+         (at (org-window-habit-create-instance-from-config
+              config-str [] boundary)))
+    (should (= (oref (car (oref before window-specs)) target-repetitions) 2))
+    (should (= (oref (car (oref at window-specs)) target-repetitions) 5))))
+
+(ert-deftest owh-test-current-active-version-retains-requirement-computations ()
+  "An unbounded current version remains active and produces requirement data."
+  (let* ((time (owh-test-make-time 2025 7 15 12))
+         (habit
+          (org-window-habit-create-instance-from-config
+           "((:from \"2025-06-01\" :window-specs ((:duration (:days 7) :repetitions 3))) (:until \"2025-06-01\" :window-specs ((:duration (:days 7) :repetitions 1))))"
+           (vector (owh-test-make-time 2025 7 14 10))
+           time))
+         (status (org-window-habit-get-window-specs-status habit time)))
+    (should (org-window-habit-active-at-time-p habit time))
+    (should (numberp (cdr (assoc "aggregatedConformingRatio" status))))
+    (should (org-window-habit-get-next-required-interval habit time))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Versioned Config: Instance Creation and Backwards Compatibility Tests
 ;;; ---------------------------------------------------------------------------

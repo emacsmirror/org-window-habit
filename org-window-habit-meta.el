@@ -96,11 +96,15 @@ Returns sum(score_i * weight_i) / sum(weight_i)."
 
 ;;; Weight extraction
 
-(defun org-window-habit-get-weight-from-config (configs)
+(defun org-window-habit-get-weight-from-config (configs &optional time)
   "Extract :weight from CONFIGS, default `org-window-habit-default-weight'.
-CONFIGS is a list of parsed config plists (from a habit's configs slot)."
+CONFIGS is a list of parsed config plists (from a habit's configs slot).
+When TIME is non-nil, use the config active at that time."
   (if configs
-      (or (plist-get (car configs) :weight)
+      (or (plist-get (if time
+                         (org-window-habit-get-config-for-time configs time)
+                       (car configs))
+                     :weight)
           org-window-habit-default-weight)
     org-window-habit-default-weight))
 
@@ -140,6 +144,7 @@ MARKERS is a list of markers pointing to habit entries.
 AGGREGATION-FN is the function to combine scores (defaults to
 `org-window-habit-meta-aggregation-fn').
 TIME is the evaluation time (defaults to current time).
+Habits without an active config at TIME are omitted.
 
 Returns an alist with:
   - \"score\": the final aggregated score (0.0-1.0+)
@@ -160,17 +165,23 @@ Returns an alist with:
             (goto-char marker)
             (when (org-window-habit-entry-p)
               (let* ((title (org-get-heading t t t t))
-                     (habit (org-window-habit-create-instance-from-heading-at-point))
-                     (status (org-window-habit-get-window-specs-status habit time))
-                     (conforming-ratio (cdr (assoc "aggregatedConformingRatio" status)))
-                     (weight (org-window-habit-get-weight-from-config (oref habit configs))))
-                (push `(("marker" . ,marker)
-                        ("title" . ,title)
-                        ("weight" . ,weight)
-                        ("conformingRatio" . ,conforming-ratio)
-                        ("windowSpecsStatus" . ,status))
-                      habit-data)
-                (push (cons conforming-ratio weight) score-weight-pairs)))))))
+                     (habit (org-window-habit-create-instance-from-heading-at-point time)))
+                (when habit
+                  (let* ((status
+                          (org-window-habit-get-window-specs-status habit time))
+                         (conforming-ratio
+                          (cdr (assoc "aggregatedConformingRatio" status)))
+                         (weight
+                          (org-window-habit-get-weight-from-config
+                           (oref habit configs) time)))
+                    (push `(("marker" . ,marker)
+                            ("title" . ,title)
+                            ("weight" . ,weight)
+                            ("conformingRatio" . ,conforming-ratio)
+                            ("windowSpecsStatus" . ,status))
+                          habit-data)
+                    (push (cons conforming-ratio weight)
+                          score-weight-pairs)))))))))
     ;; Compute aggregate score
     (let ((score (if score-weight-pairs
                      (funcall aggregation-fn (nreverse score-weight-pairs))
