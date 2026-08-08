@@ -116,9 +116,10 @@ Returns (character face) or a list of such pairs for the present interval."
           (< without-completion-assessment-value with-completion-assessment-value))
          (next-required-interval (org-window-habit-get-next-required-interval habit))
          (completion-expected-today
-          (org-window-habit-time-falls-in-assessment-interval
-           window
-           next-required-interval))
+          (and next-required-interval
+               (org-window-habit-time-falls-in-assessment-interval
+                window
+                next-required-interval)))
          (interval-has-completion (> completions-in-interval 0)))
     (pcase current-interval-time-type
       ('present
@@ -178,9 +179,16 @@ Returns (character face) or a list of such pairs for the present interval."
 Returns a list of (character face) pairs for each interval:
 - Past intervals showing historical conformity
 - Present interval showing current status
-- Future intervals projecting expected conformity"
+- Future intervals projecting expected conformity
+Return nil when HABIT is inactive at NOW."
   (setq now (or now (current-time)))
-  (with-slots
+  (let ((active-habit (org-window-habit-for-time habit now)))
+    (cond
+     ((null active-habit) nil)
+     ((not (eq active-habit habit))
+      (org-window-habit-build-graph active-habit now))
+     (t
+      (with-slots
       (assessment-decrement-plist window-specs reschedule-interval
                                   max-repetitions-per-interval start-time aggregation-fn
                                   assessment-interval graph-assessment-fn)
@@ -273,7 +281,7 @@ Returns a list of (character face) pairs for each interval:
                     completion-in-interval-count
                     'future
                     habit
-                    (oref (car iterators) window))))))))))
+                    (oref (car iterators) window)))))))))))))
 
 
 ;;; Graph rendering
@@ -293,11 +301,11 @@ GRAPH-INFO is a list of (character face) pairs."
 
 (defun org-window-habit-streak-string (habit &optional now)
   "Return the configured streak display string for HABIT as of NOW."
-  (if org-window-habit-show-streak
-      (format org-window-habit-streak-format
-              (org-window-habit-current-streak
-               habit now org-window-habit-streak-threshold))
-    ""))
+  (let ((streak (org-window-habit-current-streak
+                 habit now org-window-habit-streak-threshold)))
+    (if (and org-window-habit-show-streak streak)
+        (format org-window-habit-streak-format streak)
+      "")))
 
 (defun org-window-habit-make-graph-display-string (habit &optional now)
   "Return HABIT's graph string with optional streak display as of NOW."

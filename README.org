@@ -134,7 +134,8 @@ SCHEDULED: <2024-01-15 Mon .+1d>
 | =:reschedule-days=                | No       | =:only-days= or all days | Restrict reminder dates without filtering completions |
 | =:max-reps-per-interval=          | No       | =1=                      | Max completions counted per assessment interval       |
 | =:only-days=                      | No       | (all days)               | Restrict specific completion days                     |
-| =:from=                           | No       | (unbounded)              | Ignore completions before this date                   |
+| =:from=                           | No       | (unbounded)              | Start requiring the habit at this inclusive date      |
+| =:until=                          | No       | (unbounded)              | Stop requiring the habit at this exclusive date       |
 
 *Window spec format:*
 #+begin_src elisp
@@ -162,16 +163,28 @@ This defines:
 
 *Versioned config rules:*
 1. Configs are listed in *reverse temporal order* (most recent first)
-2. The first config has no =:until= (active now and forever)
-3. Each config's =:from= is implicitly the previous config's =:until=
-4. An explicit =:from= on a config creates a *gap* where the habit is inactive
+2. Each config is active over the half-open range =[from, until)=
+3. =:from= is inclusive; =:until= is exclusive; omitted bounds are unbounded
+4. Matching adjacent bounds produce a continuous rule change; a gap between
+   bounds makes the habit inactive during that period
 
 *With a gap (habit pause):*
 #+begin_src org
-:OWH_CONFIG: ((:window-specs ((:duration (:days 7) :repetitions 5))) (:until "2024-06-01" :from "2024-01-01" :window-specs ((:duration (:days 7) :repetitions 3))))
+:OWH_CONFIG: ((:from "2024-09-01" :window-specs ((:duration (:days 7) :repetitions 5))) (:until "2024-06-01" :window-specs ((:duration (:days 7) :repetitions 3))))
 #+end_src
 
-This habit was inactive before January 1, 2024 (the =:from= on the oldest config acts like a reset time).
+This habit was inactive from June 1 through August 31, then resumed on
+September 1.  A single config with =:until= and no later version represents a
+habit that remains inactive after that date.
+
+At runtime, =org-window-habit-create-instance-from-heading-at-point= and
+=org-window-habit-create-instance-from-config= accept an optional reference
+time and return nil when no config is active then.
+=org-window-habit-active-at-time-p= tests an existing instance, while
+=org-window-habit-for-time= returns an instance materialized with the version
+active at the requested time or nil for a gap.  Status and scheduling APIs use
+the same behavior and return nil rather than a conformity or requirement for an
+inactive habit.
 
 *** Legacy: Scattered Properties
 

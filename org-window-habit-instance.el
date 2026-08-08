@@ -40,11 +40,12 @@
 
 ;;; Instance creation from org entry
 
-(defun org-window-habit-create-instance-from-heading-at-point ()
+(defun org-window-habit-create-instance-from-heading-at-point (&optional time)
   "Construct an instance of class `org-window-habit' from the current org entry.
 Checks for CONFIG property first (unified format), then falls back to
 scattered properties (WINDOW_DURATION, WINDOW_SPECS, etc.) for backwards
-compatibility."
+compatibility.  TIME defaults to the current time.  Return nil when the
+entry's config is inactive at TIME."
   (save-excursion
     (let* ((done-times
             (sort
@@ -56,56 +57,30 @@ compatibility."
            (config-str (org-entry-get nil (org-window-habit-property "CONFIG") t)))
       (if config-str
           ;; New CONFIG property format
-          (org-window-habit-create-instance-from-config config-str done-times-vector)
+          (org-window-habit-create-instance-from-config
+           config-str done-times-vector time)
         ;; Fall back to scattered properties
-        (org-window-habit-create-instance-from-scattered-properties done-times-vector)))))
+        (org-window-habit-create-instance-from-scattered-properties
+         done-times-vector time)))))
 
-(defun org-window-habit-create-instance-from-config (config-str done-times-vector)
+(defun org-window-habit-create-instance-from-config
+    (config-str done-times-vector &optional time)
   "Create habit instance from CONFIG-STR with DONE-TIMES-VECTOR.
-CONFIG-STR is the value of the CONFIG property (single or versioned config)."
+CONFIG-STR is the value of the CONFIG property (single or versioned config).
+TIME defaults to the current time.  Return nil when no config is active then."
   (let* ((configs (org-window-habit-parse-config config-str))
-         ;; Get current config (first in list) for active parameters
-         (current-config (car configs))
-         ;; Extract parameters from current config
-         (window-specs-data (plist-get current-config :window-specs))
-         (window-specs (cl-loop for args in window-specs-data
-                                collect (apply #'make-instance
-                                               'org-window-habit-window-spec args)))
-         (assessment-interval (or (plist-get current-config :assessment-interval)
-                                  '(:days 1)))
-         (reschedule-interval
-          (org-window-habit-config-get-reschedule-interval current-config))
-         (reschedule-assessment-interval
-          (org-window-habit-config-get-reschedule-assessment-interval
-           current-config))
-         (aggregation-fn (or (plist-get current-config :aggregation-fn)
-                             'org-window-habit-default-aggregation-fn))
-         (reschedule-threshold
-          (or (plist-get current-config :reschedule-threshold) 1.0))
-         (max-reps (or (plist-get current-config :max-reps-per-interval) 1))
-         (only-days (plist-get current-config :only-days))
-         (reschedule-days (plist-get current-config :reschedule-days))
-         ;; :from on single config acts like reset-time
-         (reset-time (plist-get current-config :from)))
-    (make-instance 'org-window-habit
-                   :start-time nil
-                   :reset-time reset-time
-                   :only-days only-days
-                   :reschedule-days reschedule-days
-                   :window-specs window-specs
-                   :assessment-interval assessment-interval
-                   :reschedule-assessment-interval reschedule-assessment-interval
-                   :aggregation-fn aggregation-fn
-                   :reschedule-interval reschedule-interval
-                   :reschedule-threshold reschedule-threshold
-                   :done-times done-times-vector
-                   :max-repetitions-per-interval max-reps
-                   :configs configs)))
+         (config (org-window-habit-get-config-for-time
+                  configs (or time (current-time)))))
+    (when config
+      (org-window-habit--make-instance-for-config
+       configs config done-times-vector time))))
 
-(defun org-window-habit-create-instance-from-scattered-properties (done-times-vector)
+(defun org-window-habit-create-instance-from-scattered-properties
+    (done-times-vector &optional time)
   "Create habit instance from scattered properties with DONE-TIMES-VECTOR.
 This is the backwards-compatible path for habits without CONFIG property.
-Also builds and stores a config plist in the configs slot for uniformity."
+Also builds and stores a config plist in the configs slot for uniformity.
+TIME defaults to the current time."
   (let* ((assessment-interval-str
           (org-entry-get nil (org-window-habit-property "ASSESSMENT_INTERVAL")))
          (assessment-interval
@@ -184,19 +159,22 @@ Also builds and stores a config plist in the configs slot for uniformity."
             (when reset-time
               (setq c (plist-put c :from reset-time)))
             c)))
-    (make-instance 'org-window-habit
-                   :start-time nil
-                   :reset-time reset-time
-                   :only-days only-days
-                   :reschedule-days reschedule-days
-                   :window-specs window-specs-objects
-                   :assessment-interval assessment-interval
-                   :reschedule-assessment-interval reschedule-assessment-interval
-                   :reschedule-interval reschedule-interval
-                   :reschedule-threshold reschedule-threshold
-                   :done-times done-times-vector
-                   :max-repetitions-per-interval max-repetitions-per-interval
-                   :configs (list config))))
+    (org-window-habit-for-time
+     (make-instance 'org-window-habit
+                    :start-time nil
+                    :reset-time reset-time
+                    :only-days only-days
+                    :reschedule-days reschedule-days
+                    :window-specs window-specs-objects
+                    :assessment-interval assessment-interval
+                    :reschedule-assessment-interval reschedule-assessment-interval
+                    :reschedule-interval reschedule-interval
+                    :reschedule-threshold reschedule-threshold
+                    :done-times done-times-vector
+                    :max-repetitions-per-interval max-repetitions-per-interval
+                    :configs (list config)
+                    :active-config config)
+     time)))
 
 (defun org-window-habit-build-window-specs-plists-from-properties ()
   "Build window-specs as plists from current heading's scattered properties.

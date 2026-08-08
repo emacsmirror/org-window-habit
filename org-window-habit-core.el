@@ -132,7 +132,11 @@ Computed from earliest completion or reset-time if not specified.")
     :initarg :configs :initform nil
     :documentation "List of parsed versioned config plists with resolved dates.
 Each config plist contains :window-specs, :from, :until, and other habit parameters.
-Used for habits with evolving requirements over time."))
+Used for habits with evolving requirements over time.")
+   (active-config
+    :initarg :active-config :initform nil
+    :documentation "Config plist materialized into this instance's runtime slots.
+Nil is also used by manually constructed habits without versioned config data."))
   "A window-based habit with configurable evaluation windows and conformity tracking.")
 
 (defclass org-window-habit-window-spec ()
@@ -291,6 +295,73 @@ If there are no completions after reset, return nil."
 (cl-defmethod org-window-habit-has-any-done-times ((habit org-window-habit))
   "Return non-nil if HABIT has any recorded completions."
   (> (length (oref habit done-times)) 0))
+
+(defun org-window-habit--make-instance-for-config
+    (configs config done-times &optional time graph-assessment-fn)
+  "Materialize CONFIG from CONFIGS as a habit over DONE-TIMES.
+TIME defaults to the current time.  GRAPH-ASSESSMENT-FN, when non-nil,
+is preserved on the new instance."
+  (setq time (or time (current-time)))
+  (let* ((window-specs
+          (cl-loop for args in (plist-get config :window-specs)
+                   collect (apply #'make-instance
+                                  'org-window-habit-window-spec args)))
+         (assessment-interval
+          (org-window-habit-config-get-assessment-interval config))
+         (reset-time (plist-get config :from))
+         (start-time
+          (unless (or reset-time (> (length done-times) 0))
+            (org-window-habit-normalize-time-to-duration
+             time assessment-interval))))
+    (make-instance
+     'org-window-habit
+     :start-time start-time
+     :reset-time reset-time
+     :only-days (plist-get config :only-days)
+     :reschedule-days (plist-get config :reschedule-days)
+     :window-specs window-specs
+     :assessment-interval assessment-interval
+     :reschedule-assessment-interval
+     (org-window-habit-config-get-reschedule-assessment-interval config)
+     :aggregation-fn (or (plist-get config :aggregation-fn)
+                         'org-window-habit-default-aggregation-fn)
+     :reschedule-interval
+     (org-window-habit-config-get-reschedule-interval config)
+     :reschedule-threshold
+     (org-window-habit-config-get-reschedule-threshold config)
+     :done-times done-times
+     :max-repetitions-per-interval
+     (org-window-habit-config-get-max-reps-per-interval config)
+     :graph-assessment-fn graph-assessment-fn
+     :configs configs
+     :active-config config)))
+
+(cl-defmethod org-window-habit-active-at-time-p
+  ((habit org-window-habit) &optional time)
+  "Return non-nil when HABIT has an active config at TIME.
+TIME defaults to the current time.  Habits without config history are
+always active."
+  (or (null (oref habit configs))
+      (org-window-habit-get-config-for-time
+       (oref habit configs) (or time (current-time)))))
+
+(cl-defmethod org-window-habit-for-time
+  ((habit org-window-habit) &optional time)
+  "Return HABIT materialized with the config active at TIME.
+TIME defaults to the current time.  Return nil when TIME is outside every
+config range.  The original instance is returned when it already represents
+the selected config."
+  (setq time (or time (current-time)))
+  (if (null (oref habit configs))
+      habit
+    (let ((config (org-window-habit-get-config-for-time
+                   (oref habit configs) time)))
+      (when config
+        (if (eq config (oref habit active-config))
+            habit
+          (org-window-habit--make-instance-for-config
+           (oref habit configs) config (oref habit done-times)
+           time (oref habit graph-assessment-fn)))))))
 
 
 ;;; Window spec methods
