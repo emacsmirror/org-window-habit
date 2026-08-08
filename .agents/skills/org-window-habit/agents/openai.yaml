@@ -1,4 +1,4 @@
 interface:
   display_name: "Org Window Habit"
-  short_description: "Edit and pause window-based Org habits"
-  default_prompt: "Use $org-window-habit to update this habit while preserving its configuration history."
+  short_description: "Design and edit window-based Org habits"
+  default_prompt: "Use $org-window-habit to design or update this window habit with the right completion, assessment, and reminder semantics."
