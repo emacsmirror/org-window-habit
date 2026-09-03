@@ -1338,6 +1338,19 @@ This tests backwards compatibility - both old formats work."
   (let ((graph-info '((?x face1) (?y face2) (?z face3))))
     (should (= (length (org-window-habit-make-graph-string graph-info)) 3))))
 
+(ert-deftest owh-test-make-graph-string-non-ascii-glyphs ()
+  "Non-ASCII glyphs such as the default ✓ and ☐ must render with their faces."
+  (let* ((graph-info `((,org-window-habit-completed-glyph face1)
+                       (?\s face2)
+                       (,org-window-habit-completion-needed-today-glyph face3)))
+         (graph (org-window-habit-make-graph-string graph-info)))
+    (should (equal (substring-no-properties graph)
+                   (string org-window-habit-completed-glyph ?\s
+                           org-window-habit-completion-needed-today-glyph)))
+    (should (equal (mapcar (lambda (i) (get-text-property i 'face graph)) '(0 1 2))
+                   '(face1 face2 face3)))
+    (should (get-text-property 0 'org-window-habit-graph graph))))
+
 
 ;;; ==========================================================================
 ;;; Scenario-Based Tests: Real-World Habit Configurations

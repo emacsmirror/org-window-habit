@@ -289,13 +289,12 @@ Return nil when HABIT is inactive at NOW."
 (defun org-window-habit-make-graph-string (graph-info)
   "Convert GRAPH-INFO into a propertized string for display.
 GRAPH-INFO is a list of (character face) pairs."
-  (let ((graph (make-string (length graph-info) ?\s)))
-    (cl-loop for (character face) in graph-info
+  ;; Build the string from the characters up front: `aset' into a
+  ;; `make-string' buffer rejects non-ASCII glyphs on Emacs 31.
+  (let ((graph (concat (mapcar #'car graph-info))))
+    (cl-loop for (_character face) in graph-info
              for index from 0
-             do
-             (progn
-               (aset graph index character)
-               (put-text-property index (1+ index) 'face face graph)))
+             do (put-text-property index (1+ index) 'face face graph))
     (put-text-property 0 (length graph) 'org-window-habit-graph t graph)
     graph))
 
